@@ -190,7 +190,6 @@ top_risk_minerals |>
   ) +
   labs(
     title = "High-risk minerals cluster around import dependence\nand source exposure",
-    subtitle = "Color is rescaled to the visible top-30 range so the highest-risk minerals read darker and lower-risk minerals read lighter.",
     x = "Shortfall risk score",
     y = NULL
   ) +
@@ -447,7 +446,21 @@ source_points <- tibble::tribble(
     avg_import_reliance = replace_na(avg_import_reliance, 0),
     avg_shortfall_risk = replace_na(avg_shortfall_risk, 0),
     exposure_index = replace_na(exposure_index, 0),
-    map_label = paste0(country, "\n", minerals_exposed),
+    label_lat = case_when(
+      country == "China" ~ lat + 7.2,
+      country == "South Africa" ~ lat + 6.8,
+      country == "Australia" ~ lat + 6.4,
+      country == "Democratic Republic of the Congo" ~ lat + 7.4,
+      country == "Brazil" ~ lat + 4.6,
+      TRUE ~ lat + 4.0
+    ),
+    count_lat = case_when(
+      country == "China" ~ lat - 3.3,
+      country == "South Africa" ~ lat - 3.0,
+      country == "Australia" ~ lat - 3.0,
+      country == "Democratic Republic of the Congo" ~ lat - 2.8,
+      TRUE ~ lat - 2.0
+    ),
     status_before = as.character(relationship),
     status_after = as.character(relationship),
     status_after = if_else(country == "China", "Competitor", status_after)
@@ -522,10 +535,10 @@ if (requireNamespace("maps", quietly = TRUE)) {
     ) +
     geom_label(
       data = source_points |> filter(minerals_exposed > 0),
-      aes(lon, lat, label = map_label),
-      size = 2.8,
+      aes(lon, label_lat, label = country),
+      size = 2.9,
       label.size = 0.15,
-      label.padding = grid::unit(0.11, "lines"),
+      label.padding = grid::unit(0.10, "lines"),
       fill = "#FFFCF5",
       color = "#17201C",
       alpha = 0.92,
@@ -533,7 +546,7 @@ if (requireNamespace("maps", quietly = TRUE)) {
     ) +
     geom_point(
       data = source_points |> filter(minerals_exposed > 0),
-      aes(lon, lat, size = minerals_exposed),
+      aes(lon, count_lat, size = minerals_exposed),
       shape = 21,
       fill = "#FFFCF5",
       color = "#4A2F24",
@@ -543,24 +556,35 @@ if (requireNamespace("maps", quietly = TRUE)) {
     ) +
     geom_text(
       data = source_points |> filter(minerals_exposed > 0),
-      aes(lon, lat, label = minerals_exposed),
-      size = 3.4,
-      fontface = "bold",
+      aes(lon, count_lat, label = minerals_exposed),
+      size = 2.55,
+      fontface = "plain",
       color = "#1B120D",
       show.legend = FALSE
     ) +
     geom_point(
       data = source_points |> filter(country == selected_country),
-      aes(lon, lat),
+      aes(lon, count_lat),
       shape = 21,
       fill = NA,
       color = "#5F1F28",
-      size = 11,
+      size = 8.2,
       stroke = 1.8,
       show.legend = FALSE
     ) +
+    geom_label(
+      data = source_points |> filter(minerals_exposed > 0),
+      aes(lon, label_lat, label = country),
+      size = 2.9,
+      label.size = 0.15,
+      label.padding = grid::unit(0.10, "lines"),
+      fill = "#FFFCF5",
+      color = "#17201C",
+      alpha = 0.98,
+      show.legend = FALSE
+    ) +
     scale_fill_manual(values = map_palette, drop = FALSE) +
-    scale_size_continuous(range = c(4, 20), guide = "none") +
+    scale_size_continuous(range = c(3.2, 11.5), guide = "none") +
     annotate(
       "label",
       x = -130, y = -45,
@@ -609,10 +633,10 @@ if (requireNamespace("maps", quietly = TRUE)) {
     ) +
     geom_label(
       data = source_points |> filter(minerals_exposed > 0, country != selected_country),
-      aes(lon, lat, label = map_label),
-      size = 2.8,
+      aes(lon, label_lat, label = country),
+      size = 2.9,
       label.size = 0.15,
-      label.padding = grid::unit(0.11, "lines"),
+      label.padding = grid::unit(0.10, "lines"),
       fill = "#FFFCF5",
       color = "#17201C",
       alpha = 0.92,
@@ -620,7 +644,7 @@ if (requireNamespace("maps", quietly = TRUE)) {
     ) +
     geom_point(
       data = source_points |> filter(minerals_exposed > 0, country != selected_country),
-      aes(lon, lat, size = minerals_exposed),
+      aes(lon, count_lat, size = minerals_exposed),
       shape = 21,
       fill = "#FFFCF5",
       color = "#4A2F24",
@@ -630,14 +654,25 @@ if (requireNamespace("maps", quietly = TRUE)) {
     ) +
     geom_text(
       data = source_points |> filter(minerals_exposed > 0, country != selected_country),
-      aes(lon, lat, label = minerals_exposed),
-      size = 3.4,
-      fontface = "bold",
+      aes(lon, count_lat, label = minerals_exposed),
+      size = 2.55,
+      fontface = "plain",
       color = "#1B120D",
       show.legend = FALSE
     ) +
+    geom_label(
+      data = source_points |> filter(minerals_exposed > 0, country != selected_country),
+      aes(lon, label_lat, label = country),
+      size = 2.9,
+      label.size = 0.15,
+      label.padding = grid::unit(0.10, "lines"),
+      fill = "#FFFCF5",
+      color = "#17201C",
+      alpha = 0.98,
+      show.legend = FALSE
+    ) +
     scale_fill_manual(values = map_palette, drop = FALSE) +
-    scale_size_continuous(range = c(4, 20), guide = "none") +
+    scale_size_continuous(range = c(3.2, 11.5), guide = "none") +
     annotate("label", x = -53, y = -43, label = loss_label, size = 3.2, fontface = "bold", fill = "#F7EFEA", color = "#17201C", label.size = 0.2) +
     annotate("text", x = 86, y = 19, label = "lost source link", size = 2.8, color = "#8A4E57", fontface = "bold") +
     labs(title = "After: China removed")
@@ -681,7 +716,7 @@ estimated_trade_value_at_risk = import_value_2022 * import_share_from_china_2022
 
 <div class="visual-spacer"></div>
 
-# Global Production Context From USGS World Tables
+# Global Production Context
 
 The core project focuses on the 10 principal source countries in the starter catalog. This section widens the lens: the USGS world-production tables show where critical minerals are produced globally, which helps explain whether the U.S. has alternative producer countries if a principal source becomes unreliable.
 
@@ -724,7 +759,6 @@ producer_country_summary |>
 
 # Mineral-To-Source Catalog Wall
 
-<div class="visual-note">This compact audit view shows all 50 minerals at once and helps the reader see the full catalog behind the summary charts.</div>
 
 ```{r catalog-wall, fig.width=11, fig.height=7, echo=FALSE}
 catalog_wall <- minerals |>
@@ -989,3 +1023,6 @@ ggplot(cascade_data) +
 <div class="key-takeaway"><strong>Key takeaway:</strong> Critical mineral risk is a cascade: country dependency becomes mineral shortfall, mineral shortfall becomes sector disruption, and sector disruption can become economic and national security exposure.</div>
 
 <div class="visual-spacer"></div>
+
+
+
