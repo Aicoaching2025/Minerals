@@ -1,0 +1,991 @@
+---
+title: "US Mineral Imports: Source Dependency and Potential Shortfall Impacts"
+output:
+  html_document:
+---
+
+```{r setup, message=FALSE, warning=FALSE, echo=FALSE}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(forcats)
+library(scales)
+
+data_path <- "outputs/data/critical_minerals_capstone_minimal.csv"
+source_country_path <- "outputs/data/critical_minerals_source_country.csv"
+
+minerals <- read_csv(data_path, show_col_types = FALSE) |>
+  mutate(
+    relationship = str_to_title(principal_source_relationship_user),
+    relationship = factor(relationship, levels = c("Competitor", "Neutral", "Ally")),
+    import_reliance_pct = as.numeric(import_reliance_pct),
+    source_concentration_pct = as.numeric(source_concentration_pct),
+    shortfall_risk_score = as.numeric(shortfall_risk_score),
+    shortfall_risk_band = factor(shortfall_risk_band, levels = c("Critical", "High", "Moderate", "Lower")),
+    principal_source_country_user = str_squish(principal_source_country_user)
+  )
+
+source_country <- read_csv(source_country_path, show_col_types = FALSE) |>
+  filter(
+    !is.na(country),
+    !str_detect(country, "^World total"),
+    country != "Other countries"
+  ) |>
+  mutate(
+    country = str_squish(country),
+    country_relationship = str_to_title(country_relationship),
+    country_relationship = factor(country_relationship, levels = c("Competitor", "Neutral", "Ally")),
+    production_share_pct = as.numeric(production_share_pct)
+  )
+
+rel_palette <- c(
+  Competitor = "#5F8575",
+  Neutral = "#969696",
+  Ally = "#B8A9D9"
+)
+
+risk_palette <- c(
+  Critical = "#7B5EA7", # muted deep purple
+  High     = "#A88BC5", # soft lavender
+  Moderate = "#C9C3D8", # pale gray-lavender
+  Lower    = "#DCECC9"  # pale green
+)
+
+theme_capstone <- function() {
+  theme_minimal(base_family = "Arial") +
+    theme(
+      plot.title = element_text(face = "bold", size = 17, color = "#17201C"),
+      plot.subtitle = element_text(size = 11, color = "#5D665F"),
+      axis.title = element_text(size = 10, color = "#5D665F"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.y = element_blank(),
+      legend.position = "bottom",
+      legend.title = element_blank()
+    )
+}
+```
+
+
+<style>
+.visual-spacer {
+  margin: 58px 0 46px 0;
+  border-top: 1px solid #E6DED1;
+}
+.key-takeaway {
+  margin: 18px 0 6px 0;
+  padding: 14px 18px;
+  border-left: 5px solid #5F8575;
+  background: #F7F4EE;
+  color: #1B120D;
+  font-size: 1.06em;
+  line-height: 1.45;
+}
+.visual-note {
+  margin: 12px 0 8px 0;
+  color: #4A4038;
+  font-size: 1.03em;
+}
+</style>
+
+
+
+
+```{r relationship-exposure, fig.width=10, fig.height=4.4, echo=FALSE}
+relationship_summary <- minerals |>
+  count(relationship, name = "minerals") |>
+  mutate(
+    share = minerals / sum(minerals),
+    label = case_when(
+      relationship == "Ally" ~ paste0(percent(share, accuracy = 1), " of minerals\ncome from\nally sources"),
+      relationship == "Neutral" ~ paste0(percent(share, accuracy = 1), " of minerals\ncome from\nneutral sources"),
+      relationship == "Competitor" ~ paste0(percent(share, accuracy = 1), " of minerals\nare tied to\ncompetitor sources"),
+      TRUE ~ paste0(percent(share, accuracy = 1), " of minerals")
+    )
+  )
+
+ggplot(relationship_summary, aes(x = 1, y = share, fill = relationship)) +
+  geom_col(width = 0.45) +
+  geom_text(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    color = "white",
+    fontface = "bold",
+    size = 3.35,
+    lineheight = 0.86
+  ) +
+  coord_flip() +
+  scale_fill_manual(values = rel_palette, drop = FALSE) +
+  scale_y_continuous(labels = percent_format(), expand = c(0, 0)) +
+  labs(
+    title = "An Analysis of the Share of 50 critical minerals by principal source-country relationship",
+    subtitle = "Percentages show the share of minerals whose current principal source country is classified as ally, neutral, or competitor."
+  ) +
+  theme_capstone() +
+  theme(
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 17, face = "bold", color = "#17201C"),
+    plot.subtitle = element_text(size = 11.5, color = "#5D665F", margin = margin(b = 10))
+  )
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> In this 50-mineral starter catalog, competitor-linked countries account for the largest share of principal source relationships, making the dependency story about geopolitical reliability as much as import reliance.</div>
+
+<div class="visual-spacer"></div>
+
+# Minerals Most Exposed To Supply Disruption
+
+<div class="visual-note">This ranking highlights the materials that deserve the most attention when import reliance, source concentration, source relationship, and sector impact are combined.</div>
+
+```{r top-risk-minerals, fig.width=10, fig.height=11, echo=FALSE, warning=FALSE}
+soft_green_gradient <- c(
+  "#F7FAF4",
+  "#E8F0E0",
+  "#D4E2C7",
+  "#B9CCAA",
+  "#98AF87",
+  "#758D66"
+)
+
+top_risk_minerals <- minerals |>
+  slice_max(shortfall_risk_score, n = 30) |>
+  arrange(desc(shortfall_risk_score)) |>
+  mutate(mineral = fct_reorder(mineral, shortfall_risk_score))
+
+risk_min <- floor(min(top_risk_minerals$shortfall_risk_score, na.rm = TRUE) / 2.5) * 2.5
+risk_max <- ceiling(max(top_risk_minerals$shortfall_risk_score, na.rm = TRUE) / 2.5) * 2.5
+
+top_risk_minerals |>
+  ggplot(aes(
+    x = shortfall_risk_score,
+    y = mineral,
+    fill = shortfall_risk_score
+  )) +
+  geom_col(width = 0.68) +
+  geom_text(
+    aes(label = shortfall_risk_score),
+    hjust = -0.15,
+    size = 3.2,
+    fontface = "bold",
+    color = "#17201C"
+  ) +
+  scale_fill_gradientn(
+    colors = soft_green_gradient,
+    limits = c(risk_min, risk_max),
+    breaks = seq(risk_min, risk_max, by = 5),
+    name = "Risk score",
+    guide = guide_colorbar(
+      barwidth = 8,
+      barheight = 0.45,
+      title.position = "top"
+    )
+  ) +
+  scale_x_continuous(
+    limits = c(0, 105),
+    breaks = seq(0, 100, by = 10),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  labs(
+    title = "High-risk minerals cluster around import dependence\nand source exposure",
+    subtitle = "Color is rescaled to the visible top-30 range so the highest-risk minerals read darker and lower-risk minerals read lighter.",
+    x = "Shortfall risk score",
+    y = NULL
+  ) +
+  theme_capstone() +
+  theme(legend.position = "bottom")
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> The highest-risk minerals are concentrated in materials tied to batteries, semiconductors, rare earths, and strategic industrial uses, making disruption risk visible before any country-specific trade-value analysis.</div>
+
+<div class="visual-spacer"></div>
+
+# Import Reliance vs Source Concentration
+
+<div class="visual-note">This quadrant view explains why some minerals are more vulnerable than others: high U.S. import reliance becomes more dangerous when global production is also concentrated.</div>
+
+```{r import-reliance-risk-matrix, fig.width=10, fig.height=7.4, echo=FALSE, warning=FALSE}
+quadrant_palette <- c(
+  Competitor = "#41AB5D",
+  Neutral = "#969696",
+  Ally = "#6A51A3"
+)
+
+quadrant_data <- minerals |>
+  filter(!is.na(import_reliance_pct), !is.na(source_concentration_pct))
+
+top_right_labels <- quadrant_data |>
+  filter(import_reliance_pct >= 50, source_concentration_pct >= 50) |>
+  arrange(desc(import_reliance_pct + source_concentration_pct + shortfall_risk_score)) |>
+  slice_head(n = 2)
+
+top_right_neutral_label <- quadrant_data |>
+  filter(relationship == "Neutral", import_reliance_pct >= 50, source_concentration_pct >= 50) |>
+  arrange(desc(import_reliance_pct + source_concentration_pct + shortfall_risk_score)) |>
+  slice_head(n = 1)
+
+quadrant_labels <- bind_rows(top_right_labels, top_right_neutral_label) |>
+  distinct(mineral, .keep_all = TRUE)
+
+quadrant_labels_expanded <- quadrant_data |>
+  filter(import_reliance_pct >= 75, source_concentration_pct >= 70) |>
+  arrange(desc(import_reliance_pct + source_concentration_pct + shortfall_risk_score)) |>
+  slice_head(n = 5)
+
+quadrant_data |>
+  ggplot(aes(
+    x = import_reliance_pct,
+    y = source_concentration_pct,
+    fill = relationship
+  )) +
+  annotate(
+    "label",
+    x = 24, y = 94,
+    label = "Producer concentration risk",
+    size = 4,
+    fontface = "bold",
+    color = "#1B120D",
+    fill = "#F7F3EA",
+    label.size = 0.2
+  ) +
+  annotate(
+    "label",
+    x = 81, y = 94,
+    label = "Highest disruption risk",
+    size = 4,
+    fontface = "bold",
+    color = "#1B120D",
+    fill = "#EAF4EA",
+    label.size = 0.2
+  ) +
+  annotate(
+    "label",
+    x = 24, y = 13,
+    label = "Lower near-term exposure",
+    size = 4,
+    color = "#1B120D",
+    fill = "#F7F3EA",
+    label.size = 0.2
+  ) +
+  annotate(
+    "label",
+    x = 81, y = 13,
+    label = "Import dependence risk",
+    size = 4,
+    color = "#1B120D",
+    fill = "#F7F3EA",
+    label.size = 0.2
+  ) +
+  geom_hline(yintercept = 50, color = "#BFAF95", linewidth = 0.9) +
+  geom_vline(xintercept = 50, color = "#BFAF95", linewidth = 0.9) +
+  geom_point(shape = 21, size = 5.5, color = "#4A2F24", stroke = 0.65, alpha = 0.86) +
+  {
+    if (requireNamespace("ggrepel", quietly = TRUE)) {
+      ggrepel::geom_text_repel(
+        data = quadrant_labels_expanded,
+        aes(label = mineral),
+        size = 3.15,
+        color = "#1B120D",
+        fontface = "plain",
+        min.segment.length = 0,
+        segment.color = "#8C7A66",
+        segment.linewidth = 0.25,
+        box.padding = 0.25,
+        point.padding = 0.18,
+        max.overlaps = 30,
+        show.legend = FALSE
+      )
+    } else {
+      geom_text(
+        data = quadrant_labels_expanded,
+        aes(label = mineral),
+        size = 3.15,
+        vjust = -0.9,
+        color = "#1B120D",
+        fontface = "plain",
+        check_overlap = TRUE,
+        show.legend = FALSE
+      )
+    }
+  } +
+  scale_fill_manual(
+    values = quadrant_palette,
+    drop = FALSE,
+    guide = guide_legend(
+      override.aes = list(size = 7, color = "#4A2F24", stroke = 1.1, alpha = 1),
+      title.position = "left"
+    )
+  ) +
+  scale_x_continuous(labels = percent_format(scale = 1), limits = c(0, 105), breaks = seq(0, 100, by = 25)) +
+  scale_y_continuous(labels = percent_format(scale = 1), limits = c(0, 105), breaks = seq(0, 100, by = 25)) +
+  labs(
+    title = "Quadrants show how U.S. import reliance and global source concentration\ncombine to create shortfall risk.",
+    x = "U.S. net import reliance",
+    y = "Top producer share of world production",
+    fill = "Source Type"
+  ) +
+  theme_capstone() +
+  theme(
+    axis.line = element_line(color = "#5A392B", linewidth = 0.9),
+    axis.ticks = element_line(color = "#5A392B", linewidth = 0.8),
+    axis.ticks.length = grid::unit(4, "pt"),
+    axis.text = element_text(color = "#5A392B", size = 12),
+    axis.title = element_text(color = "#5A392B", size = 15, face = "bold"),
+    axis.title.x = element_text(margin = margin(t = 10)),
+    axis.title.y = element_text(margin = margin(r = 12)),
+    legend.position = "bottom",
+    legend.text = element_text(color = "#1B120D", size = 12),
+    legend.title = element_text(color = "#1B120D", size = 13, face = "bold"),
+    legend.key.size = grid::unit(0.55, "in"),
+    legend.spacing.x = grid::unit(0.28, "in"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(color = "#1B120D", face = "bold"),
+    plot.subtitle = element_text(color = "#3C332B")
+  )
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> The upper-right quadrant represents minerals with high U.S. import reliance and highly concentrated global production. Many of the most exposed minerals in that zone are linked to competitor countries, meaning disruption risk is both economic and strategic.</div>
+
+<div class="visual-spacer"></div>
+
+# Fragile Trade: The Risk of Depending on Competitors
+
+<div class="visual-note">This chart returns to the project’s principal-source country scope and shows which countries anchor the starter catalog’s dependency profile.</div>
+
+```{r country-dependency, fig.width=10, fig.height=6, echo=FALSE}
+country_dependency <- minerals |>
+  count(principal_source_country_user, relationship, name = "minerals") |>
+  group_by(principal_source_country_user) |>
+  mutate(total = sum(minerals)) |>
+  ungroup() |>
+  mutate(principal_source_country_user = fct_reorder(principal_source_country_user, total))
+
+ggplot(country_dependency, aes(x = minerals, y = principal_source_country_user, fill = relationship)) +
+  geom_col(width = 0.68) +
+  geom_text(
+    aes(label = minerals),
+    position = position_stack(vjust = 0.5),
+    color = "white",
+    fontface = "bold",
+    size = 3.4
+  ) +
+  scale_fill_manual(values = rel_palette, drop = FALSE) +
+  labs(
+    subtitle = "The U.S. relies on competitor-linked sources for many essential minerals, creating shortfall risk if geopolitical tensions disrupt trade..",
+    x = "Number of critical minerals",
+    y = NULL
+  ) +
+  theme_capstone()
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> China dominates the principal-source dependency profile, so a political or trade disruption with China would expose more critical minerals than disruptions with any other single country in the starter catalog.</div>
+
+<div class="visual-spacer"></div>
+
+# China Removed: Before / After Map Scenario
+
+<div class="visual-note">This is a visual scenario, not a literal trade-flow model. The first map shows the current principal-source network. The second map removes China and uses an arrow/callout to show the minerals and sectors that become exposed.</div>
+
+```{r china-before-after-map, fig.width=12, fig.height=13.5, message=FALSE, warning=FALSE, echo=FALSE}
+selected_country <- "China"
+
+china_exposure <- minerals |>
+  mutate(
+    scenario = if_else(
+      principal_source_country_user == selected_country,
+      paste("Exposed if", selected_country, "trade stops"),
+      "Not directly exposed"
+    ),
+    exposure_burden = if_else(
+      principal_source_country_user == selected_country,
+      shortfall_risk_score * coalesce(import_reliance_pct, 50) / 100,
+      0
+    )
+  )
+
+china_loss <- china_exposure |>
+  filter(principal_source_country_user == selected_country) |>
+  summarise(
+    exposed_minerals = n(),
+    average_import_reliance = mean(import_reliance_pct, na.rm = TRUE),
+    average_shortfall_risk = mean(shortfall_risk_score, na.rm = TRUE),
+    total_exposure_burden = sum(exposure_burden, na.rm = TRUE),
+    sectors_exposed = n_distinct(primary_sector),
+    .groups = "drop"
+  )
+
+source_points <- tibble::tribble(
+  ~country, ~lon, ~lat,
+  "China", 104, 35,
+  "Canada", -106, 56,
+  "South Africa", 24, -29,
+  "Democratic Republic of the Congo", 23, -3,
+  "Mexico", -102, 23,
+  "Australia", 134, -25,
+  "Indonesia", 118, -2,
+  "Brazil", -52, -10,
+  "Russia", 90, 60,
+  "United States", -98, 39
+) |>
+  left_join(
+    minerals |>
+      group_by(principal_source_country_user, relationship) |>
+      summarise(
+        minerals_exposed = n(),
+        avg_import_reliance = mean(import_reliance_pct, na.rm = TRUE),
+        avg_shortfall_risk = mean(shortfall_risk_score, na.rm = TRUE),
+        exposure_index = sum(shortfall_risk_score * coalesce(import_reliance_pct, 50) / 100, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = c("country" = "principal_source_country_user")
+  ) |>
+  mutate(
+    minerals_exposed = replace_na(minerals_exposed, 0),
+    avg_import_reliance = replace_na(avg_import_reliance, 0),
+    avg_shortfall_risk = replace_na(avg_shortfall_risk, 0),
+    exposure_index = replace_na(exposure_index, 0),
+    map_label = paste0(country, "\n", minerals_exposed),
+    status_before = as.character(relationship),
+    status_after = as.character(relationship),
+    status_after = if_else(country == "China", "Competitor", status_after)
+  )
+
+map_palette <- c(
+  "Competitor" = "#74c476",
+  "Neutral" = "#969696",
+  "Ally" = "#6baed6"
+)
+
+if (requireNamespace("maps", quietly = TRUE)) {
+  world_map <- ggplot2::map_data("world")
+  country_polygons <- world_map |>
+    mutate(
+      source_country = case_when(
+        region == "USA" ~ "United States",
+        region == "Democratic Republic of the Congo" ~ "Democratic Republic of the Congo",
+        TRUE ~ region
+      )
+    ) |>
+    left_join(
+      source_points |>
+        select(country, relationship, minerals_exposed, avg_import_reliance, exposure_index),
+      by = c("source_country" = "country")
+    ) |>
+    mutate(
+      relationship = as.character(relationship),
+      relationship = if_else(source_country == "China", "Competitor", relationship),
+      relationship_after = if_else(source_country == "China", NA_character_, relationship)
+    )
+  us_point <- tibble::tibble(lon = -98, lat = 39)
+  china_point <- tibble::tibble(lon = 104, lat = 35)
+  loss_label <- paste0(
+    china_loss$exposed_minerals, " minerals exposed\n",
+    round(china_loss$average_import_reliance), "% avg import reliance\n",
+    china_loss$sectors_exposed, " sectors affected"
+  )
+
+  map_base <- ggplot() +
+    geom_polygon(
+      data = country_polygons,
+      aes(long, lat, group = group),
+      fill = "#EFE8D8",
+      color = "white",
+      linewidth = 0.12
+    ) +
+    coord_quickmap(xlim = c(-170, 155), ylim = c(-55, 75)) +
+    theme_void(base_family = "Arial") +
+    theme(
+      plot.title = element_text(face = "bold", size = 15, color = "#17201C"),
+      plot.subtitle = element_text(size = 10, color = "#5D665F"),
+      legend.position = "bottom",
+      legend.title = element_blank()
+    )
+
+  before_map <- map_base +
+    geom_polygon(
+      data = country_polygons |> filter(!is.na(relationship)),
+      aes(long, lat, group = group, fill = relationship),
+      color = "white",
+      linewidth = 0.18
+    ) +
+    geom_curve(
+      data = tibble::tibble(x = china_point$lon, y = china_point$lat, xend = us_point$lon, yend = us_point$lat),
+      aes(x = x, y = y, xend = xend, yend = yend),
+      curvature = -0.25,
+      arrow = arrow(length = grid::unit(0.18, "inches")),
+      color = "#B23A2E",
+      linewidth = 0.55,
+      alpha = 0.85
+    ) +
+    geom_label(
+      data = source_points |> filter(minerals_exposed > 0),
+      aes(lon, lat, label = map_label),
+      size = 2.8,
+      label.size = 0.15,
+      label.padding = grid::unit(0.11, "lines"),
+      fill = "#FFFCF5",
+      color = "#17201C",
+      alpha = 0.92,
+      show.legend = FALSE
+    ) +
+    geom_point(
+      data = source_points |> filter(minerals_exposed > 0),
+      aes(lon, lat, size = minerals_exposed),
+      shape = 21,
+      fill = "#FFFCF5",
+      color = "#4A2F24",
+      stroke = 0.9,
+      alpha = 0.72,
+      show.legend = FALSE
+    ) +
+    geom_text(
+      data = source_points |> filter(minerals_exposed > 0),
+      aes(lon, lat, label = minerals_exposed),
+      size = 3.4,
+      fontface = "bold",
+      color = "#1B120D",
+      show.legend = FALSE
+    ) +
+    geom_point(
+      data = source_points |> filter(country == selected_country),
+      aes(lon, lat),
+      shape = 21,
+      fill = NA,
+      color = "#5F1F28",
+      size = 11,
+      stroke = 1.8,
+      show.legend = FALSE
+    ) +
+    scale_fill_manual(values = map_palette, drop = FALSE) +
+    scale_size_continuous(range = c(4, 20), guide = "none") +
+    annotate(
+      "label",
+      x = -130, y = -45,
+      label = "Current network\nChina is included\n32 minerals mapped",
+      size = 3.2,
+      fontface = "bold",
+      fill = "#FFFCF5",
+      color = "#17201C",
+      label.size = 0.2
+    ) +
+    annotate(
+      "label",
+      x = -152, y = 64,
+      label = "Circle size = number of critical minerals",
+      size = 2.9,
+      fill = "#FFFCF5",
+      color = "#17201C",
+      label.size = 0.2
+    ) +
+    labs(title = "Before: China included")
+
+  after_map <- map_base +
+    geom_polygon(
+      data = country_polygons |> filter(!is.na(relationship_after)),
+      aes(long, lat, group = group, fill = relationship_after),
+      color = "white",
+      linewidth = 0.18
+    ) +
+    geom_polygon(
+      data = country_polygons |> filter(source_country == selected_country),
+      aes(long, lat, group = group),
+      fill = "#F8F4EC",
+      color = "#5F1F28",
+      linewidth = 0.65,
+      linetype = "dashed"
+    ) +
+    geom_curve(
+      data = tibble::tibble(x = china_point$lon, y = china_point$lat, xend = us_point$lon, yend = us_point$lat),
+      aes(x = x, y = y, xend = xend, yend = yend),
+      curvature = -0.25,
+      arrow = arrow(length = grid::unit(0.18, "inches")),
+      color = "#B23A2E",
+      linewidth = 0.75,
+      linetype = "dashed",
+      alpha = 0.95
+    ) +
+    geom_label(
+      data = source_points |> filter(minerals_exposed > 0, country != selected_country),
+      aes(lon, lat, label = map_label),
+      size = 2.8,
+      label.size = 0.15,
+      label.padding = grid::unit(0.11, "lines"),
+      fill = "#FFFCF5",
+      color = "#17201C",
+      alpha = 0.92,
+      show.legend = FALSE
+    ) +
+    geom_point(
+      data = source_points |> filter(minerals_exposed > 0, country != selected_country),
+      aes(lon, lat, size = minerals_exposed),
+      shape = 21,
+      fill = "#FFFCF5",
+      color = "#4A2F24",
+      stroke = 0.9,
+      alpha = 0.72,
+      show.legend = FALSE
+    ) +
+    geom_text(
+      data = source_points |> filter(minerals_exposed > 0, country != selected_country),
+      aes(lon, lat, label = minerals_exposed),
+      size = 3.4,
+      fontface = "bold",
+      color = "#1B120D",
+      show.legend = FALSE
+    ) +
+    scale_fill_manual(values = map_palette, drop = FALSE) +
+    scale_size_continuous(range = c(4, 20), guide = "none") +
+    annotate("label", x = -53, y = -43, label = loss_label, size = 3.2, fontface = "bold", fill = "#F7EFEA", color = "#17201C", label.size = 0.2) +
+    annotate("text", x = 86, y = 19, label = "lost source link", size = 2.8, color = "#8A4E57", fontface = "bold") +
+    labs(title = "After: China removed")
+
+  if (requireNamespace("patchwork", quietly = TRUE)) {
+    before_map / after_map +
+      patchwork::plot_annotation(
+        title = "Scenario: what happens if trade with China stops?",
+        subtitle = "Country fill shows ally, neutral, or competitor status. Circle size and labels show how many critical minerals are mapped to each source country."
+      )
+  } else {
+    before_map
+    message("Install package 'patchwork' to show before and after maps side by side: install.packages('patchwork')")
+  }
+  } else {
+    message("Package 'maps' is not installed. Run install.packages('maps') to render this map.")
+  }
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> Removing China from the source network exposes a large cluster of minerals at once, including minerals tied to high import reliance and multiple strategic sectors.</div>
+
+```{r china-exposed-minerals-table, echo=FALSE, include=FALSE}
+china_exposure |>
+  filter(principal_source_country_user == selected_country) |>
+  arrange(desc(shortfall_risk_score)) |>
+  select(
+    mineral,
+    import_reliance_pct,
+    source_concentration_pct,
+    sector_tags,
+    shortfall_risk_score,
+    shortfall_risk_band
+  ) |>
+  head(20)
+```
+
+
+```text
+estimated_trade_value_at_risk = import_value_2022 * import_share_from_china_2022
+```
+
+<div class="visual-spacer"></div>
+
+# Global Production Context From USGS World Tables
+
+The core project focuses on the 10 principal source countries in the starter catalog. This section widens the lens: the USGS world-production tables show where critical minerals are produced globally, which helps explain whether the U.S. has alternative producer countries if a principal source becomes unreliable.
+
+```{r all-producer-countries, fig.width=10, fig.height=7, echo=FALSE}
+producer_country_summary <- source_country |>
+  group_by(country, country_relationship) |>
+  summarise(
+    critical_minerals_produced = n_distinct(mineral),
+    avg_world_production_share = mean(production_share_pct, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(critical_minerals_produced))
+
+producer_country_summary |>
+  slice_max(critical_minerals_produced, n = 18) |>
+  mutate(country = fct_reorder(country, critical_minerals_produced)) |>
+  ggplot(aes(x = critical_minerals_produced, y = country, fill = country_relationship)) +
+  geom_col(width = 0.68) +
+  geom_text(aes(label = critical_minerals_produced), hjust = -0.2, size = 3.2, fontface = "bold") +
+  scale_fill_manual(values = rel_palette, drop = FALSE) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.12))) +
+  labs(
+    title = "Global production data shows possible alternatives, not guaranteed replacements",
+    subtitle = "Bars count how many critical minerals each country appears to produce in USGS world-production tables.",
+    x = "Number of critical minerals with production data",
+    y = NULL
+  ) +
+  theme_capstone()
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> The U.S. and allied countries appear across many USGS production tables, but China and Russia also appear frequently, showing why diversification is not simply a domestic problem.</div>
+
+```{r all-country-table, echo=FALSE, include=FALSE}
+producer_country_summary |>
+  arrange(desc(critical_minerals_produced), country) |>
+  head(30)
+```
+
+<div class="visual-spacer"></div>
+
+# Mineral-To-Source Catalog Wall
+
+<div class="visual-note">This compact audit view shows all 50 minerals at once and helps the reader see the full catalog behind the summary charts.</div>
+
+```{r catalog-wall, fig.width=11, fig.height=7, echo=FALSE}
+catalog_wall <- minerals |>
+  mutate(
+    principal_source_country_user = fct_reorder(
+      principal_source_country_user,
+      as.numeric(relationship),
+      .fun = length
+    ),
+    mineral = fct_reorder(mineral, as.numeric(relationship))
+  )
+
+ggplot(catalog_wall, aes(x = principal_source_country_user, y = mineral, fill = relationship)) +
+  geom_tile(color = "white", linewidth = 0.35) +
+  scale_fill_manual(values = rel_palette, drop = FALSE) +
+  labs(
+    title = "Catalog wall: every mineral has a principal source-country relationship",
+    subtitle = "Use this as a compact audit view; the main story charts should still carry the interpretation.",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_capstone() +
+  theme(
+    axis.text.x = element_text(angle = 35, hjust = 1),
+    axis.text.y = element_text(size = 7),
+    panel.grid = element_blank()
+  )
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> The catalog wall makes the dependency pattern visible at the mineral level: many individual minerals point back to the same competitor-linked source country.</div>
+
+<div class="visual-spacer"></div>
+
+# China No-Trade Scenario By Mineral
+
+<div class="visual-note">This chart answers a direct shortfall question: if trade with China stopped, which minerals would be exposed and how import-reliant are they?</div>
+
+```{r country-shutoff-scenario, fig.width=10, fig.height=6, echo=FALSE}
+selected_country <- "China"
+
+china_sector_palette <- c(
+  "Batteries" = "#E9E3F5",
+  "Defense / aerospace" = "#CDBCE8",
+  "Energy transition" = "#B49ADC",
+  "Industrial base" = "#9B7BCB",
+  "Semiconductors / electronics" = "#7E5BB7",
+  "Other / research" = "#D8D1E7"
+)
+
+scenario <- minerals |>
+  filter(principal_source_country_user == selected_country) |>
+  arrange(desc(shortfall_risk_score))
+
+scenario |>
+  slice_max(shortfall_risk_score, n = 20) |>
+  mutate(mineral = fct_reorder(mineral, shortfall_risk_score)) |>
+  ggplot(aes(x = shortfall_risk_score, y = mineral, fill = primary_sector)) +
+	  geom_col(width = 0.68) +
+	  geom_text(aes(label = paste0(round(import_reliance_pct), "% import reliant")),
+	            hjust = 1.05, color = "#1B120D", size = 3.1, fontface = "bold") +
+	  scale_fill_manual(values = china_sector_palette, drop = FALSE) +
+	  scale_x_continuous(limits = c(0, 105)) +
+	  labs(
+	    title = paste("No-trade scenario:", selected_country),
+	    subtitle = paste("Minerals currently mapped to", selected_country, "ranked by estimated shortfall risk."),
+    x = "Shortfall risk score",
+    y = NULL,
+    fill = "Primary affected sector"
+	  ) +
+		  theme_capstone()
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> China-linked minerals include several highly import-reliant materials, so a China disruption would create pressure across multiple high-priority mineral categories rather than one isolated supply chain.</div>
+
+<div class="visual-spacer"></div>
+
+# Impact By Sector
+
+<div class="visual-note">This visual translates mineral dependency into real-world consequences by grouping exposed minerals into strategic sectors.</div>
+
+```{r sector-impact, fig.width=10, fig.height=5.5, echo=FALSE}
+sector_exposure <- minerals |>
+  separate_rows(sector_tags, sep = ";\\s*") |>
+  mutate(sector_tags = str_squish(sector_tags)) |>
+  count(sector_tags, relationship, name = "minerals") |>
+  group_by(sector_tags) |>
+  mutate(total = sum(minerals)) |>
+  ungroup() |>
+  mutate(sector_tags = fct_reorder(sector_tags, total))
+
+ggplot(sector_exposure, aes(x = minerals, y = sector_tags, fill = relationship)) +
+  geom_col(width = 0.68) +
+  scale_fill_manual(values = rel_palette, drop = FALSE) +
+  labs(
+    title = "Shortfall impact concentrates in defense, batteries, electronics,\nenergy, and the industrial base",
+    subtitle = "Minerals can appear in multiple sectors because many have more than one critical use.",
+    x = "Number of exposed mineral-sector links",
+    y = NULL
+	  ) +
+	  theme_capstone()
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> Shortfall impact is concentrated in strategically important sectors, especially defense, batteries, semiconductors, energy transition, and the industrial base.</div>
+
+<div class="visual-spacer"></div>
+
+# How Critical Mineral Risk Travels Through the Economy
+
+<div class="visual-note">This bridge view shows the path from source-country dependency to mineral exposure to sector impact. It helps the reader see that a supply disruption is not isolated to mining; it can travel into batteries, defense, electronics, energy, and the industrial base.</div>
+
+```{r optional-alluvial, fig.width=14, fig.height=9.5, message=FALSE, warning=FALSE, echo=FALSE}
+if (requireNamespace("ggalluvial", quietly = TRUE)) {
+  library(ggalluvial)
+
+  alluvial_palette <- c(
+    Competitor = "#3F6F5B",
+    Neutral = "#6F6F6F",
+    Ally = "#8E75C9"
+  )
+
+  flow_data <- minerals |>
+    count(mineral, principal_source_country_user, relationship, primary_sector, name = "mineral_count") |>
+    mutate(value = 0.014)
+
+  ggplot(
+    flow_data,
+    aes(
+      axis1 = principal_source_country_user,
+      axis2 = mineral,
+      axis3 = primary_sector,
+      y = value
+    )
+  ) +
+    ggalluvial::geom_alluvium(
+      aes(fill = relationship),
+      width = 0.002,
+      alpha = 0.34,
+      color = "#E4DED4",
+      linewidth = 0.01
+    ) +
+    ggalluvial::geom_stratum(
+      width = 0.13,
+      fill = "#F3EFE7",
+      color = "#5A392B",
+      linewidth = 0.16
+    ) +
+    ggplot2::geom_text(
+      stat = "stratum",
+      aes(label = after_stat(stratum)),
+      size = 2.95,
+      color = "#1B120D",
+      lineheight = 0.92
+    ) +
+    scale_fill_manual(values = alluvial_palette, drop = FALSE) +
+    scale_x_discrete(
+      limits = c("Source Country", "Critical Mineral", "Affected Sector"),
+      expand = c(0.08, 0.08)
+    ) +
+    labs(
+      title = "Source countries connect critical minerals to strategic sectors",
+      subtitle = "Each thin path links a principal source country to a mineral and the sector that could be affected by a shortage."
+    ) +
+    theme_minimal(base_family = "Arial") +
+    theme(
+      plot.title = element_text(face = "bold", size = 19, color = "#17201C"),
+      plot.subtitle = element_text(size = 12, color = "#5D665F", margin = margin(b = 12)),
+      axis.title = element_blank(),
+      axis.text.x = element_text(face = "bold", size = 15, color = "#3A241B", margin = margin(t = 10)),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.line.x = element_line(color = "#5A392B", linewidth = 0.55),
+      panel.grid = element_blank(),
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      legend.text = element_text(size = 11, color = "#1B120D"),
+      legend.key.size = grid::unit(0.38, "in")
+    )
+} else {
+  message("Package 'ggalluvial' is not installed. Run install.packages('ggalluvial') to render this chart.")
+}
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> Mineral dependency becomes more serious when it moves beyond a source country and into the sectors that depend on those materials for production, technology, defense, and energy systems.</div>
+
+<div class="visual-spacer"></div>
+
+# Conclusion: Critical Mineral Risk Is a Cascade
+
+<div class="visual-note">This closing visual ties the project together by showing how a country-level trade disruption can move through minerals, sectors, and system-wide consequences.</div>
+
+```{r risk-cascade-conclusion, fig.width=12, fig.height=6.5, echo=FALSE}
+cascade_minerals <- minerals |>
+  filter(principal_source_country_user == "China") |>
+  arrange(desc(shortfall_risk_score)) |>
+  slice_head(n = 8) |>
+  pull(mineral) |>
+  paste(collapse = "\n")
+
+cascade_sectors <- minerals |>
+  filter(principal_source_country_user == "China") |>
+  separate_rows(sector_tags, sep = ";\\s*") |>
+  mutate(sector_tags = str_squish(sector_tags)) |>
+  count(sector_tags, sort = TRUE) |>
+  slice_head(n = 5) |>
+  mutate(label = paste0(sector_tags, " (", n, ")")) |>
+  pull(label) |>
+  paste(collapse = "\n")
+
+cascade_data <- tibble::tribble(
+  ~stage, ~x, ~title, ~body, ~fill,
+  "Trigger", 1, "Trigger", "Trade or political\nshock with China", "#F1EEE8",
+  "Minerals", 2, "Minerals Exposed", cascade_minerals, "#E8F0E0",
+  "Sectors", 3, "Sectors Affected", cascade_sectors, "#E9E3F5",
+  "Effects", 4, "System Effects", "Supply shortfalls\nPrice pressure\nProduction delays\nNational security exposure", "#F4E8E2"
+)
+
+arrow_data <- tibble::tibble(
+  x = c(1.38, 2.38, 3.38),
+  xend = c(1.62, 2.62, 3.62),
+  y = c(0.5, 0.5, 0.5),
+  yend = c(0.5, 0.5, 0.5)
+)
+
+ggplot(cascade_data) +
+  geom_rect(
+    aes(xmin = x - 0.36, xmax = x + 0.36, ymin = 0.12, ymax = 0.88, fill = stage),
+    color = "#5A392B",
+    linewidth = 0.45
+  ) +
+  geom_segment(
+    data = arrow_data,
+    aes(x = x, xend = xend, y = y, yend = yend),
+    arrow = arrow(length = grid::unit(0.18, "inches")),
+    color = "#5A392B",
+    linewidth = 0.55
+  ) +
+  geom_text(
+    aes(x = x, y = 0.78, label = title),
+    size = 5,
+    fontface = "bold",
+    color = "#1B120D"
+  ) +
+  geom_text(
+    aes(x = x, y = 0.44, label = body),
+    size = 3.55,
+    lineheight = 1.05,
+    color = "#1B120D"
+  ) +
+  scale_fill_manual(values = setNames(cascade_data$fill, cascade_data$stage), guide = "none") +
+  coord_cartesian(xlim = c(0.48, 4.52), ylim = c(0, 1), clip = "off") +
+  labs(
+    title = "Critical mineral risk cascades beyond mining",
+    subtitle = "A disruption with a key source country can move from mineral access to sector exposure and broader economic pressure."
+  ) +
+  theme_void(base_family = "Arial") +
+  theme(
+    plot.title = element_text(face = "bold", size = 18, color = "#17201C"),
+    plot.subtitle = element_text(size = 11, color = "#5D665F", margin = margin(b = 12))
+  )
+```
+
+<div class="key-takeaway"><strong>Key takeaway:</strong> Critical mineral risk is a cascade: country dependency becomes mineral shortfall, mineral shortfall becomes sector disruption, and sector disruption can become economic and national security exposure.</div>
+
+<div class="visual-spacer"></div>
